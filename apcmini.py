@@ -126,6 +126,7 @@ class APCMiniWidget(GridLayout):
         Change the state of a button or slider in response to midi
         """
         if msg.type in ['note_on', 'note_off']:
+            print 'got midi %s' % msg
             button = self.note_buttons.get(msg.note)
             if button:
                 if msg.type == 'note_on':
@@ -198,6 +199,7 @@ class ApcMiniApp(App):
         if self.midiport:
             self.midiport.close()
         self.midiport = mido.open_ioport(portname, callback=self.recv_midi, autoreset=True)
+        print 'CONNECTED TO: %s' % self.midiport.name
         # sysex to set APC Mini to mode 1
         ##m = mido.Message('sysex', data=bytearray(b'\x47\x7F\x28\x60\x00\x04\x41\x09\x01\x04'))
         ##self.midiport.send(m)
@@ -221,6 +223,7 @@ class ApcMiniApp(App):
 
     # @mainthread
     def recv_midi(self, msg):
+        global logger
         try:
             apc_widget = self.get_apc_widget()
             if not apc_widget:
@@ -231,8 +234,7 @@ class ApcMiniApp(App):
             else:
                 print 'midi msg channel {} not channel {}'.format(msg.channel, self.channel)
         except Exception as e:
-            print 'err in recv_midi'
-            print e
+            logger.exception(e)
 
 
 
@@ -241,7 +243,10 @@ def main():
     if len(sys.argv) > 1:
         portname = sys.argv[1]
     else:
-        portname = None   # Use default port
+        try:
+            portname = next(name for name in mido.get_ioport_names() if name.startswith('APC MINI MIDI'))
+        except StopIteration:
+            portname = None   # Use default port
 
 
     app = ApcMiniApp(light_behaviour=TOGGLE)
