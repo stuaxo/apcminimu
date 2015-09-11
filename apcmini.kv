@@ -20,19 +20,25 @@ FloatLayout:
             ActionButton:
                 text: app.output_port
             ActionButton:
-                text: 'Btn2'
+                text: 'Gate'
             ActionButton:
-                text: 'Btn3'
+                text: 'Toggle'
             ActionButton:
-                text: 'Btn4'
+                text: 'Clear'
+                id: 'clear_all'
             ActionGroup:
                 text: 'Group1'
                 #mode: 'spinner'
                 ActionButton:
-                    text: 'Btn5'
+                    text: 'Off'
                 ActionButton:
-                    text: 'Btn6'
+                    text: 'Green'
+                    background: [0, .5, 0]
                 ActionButton:
-                    text: 'Btn7'
+                    text: 'Red'
+                    color: [.5, 0, 0]
+                ActionButton:
+                    text: 'Yellow'
+                    color: [.5, .5, 0]
     APCMiniWidget:
         size_hint: 1, 0.9
