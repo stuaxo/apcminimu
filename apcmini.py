@@ -20,9 +20,14 @@ $ pip install kivy mido
 """
 
 
+import logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
+
 import itertools
-import threading
 import sys
+import threading
+import traceback
 
 import mido
 
@@ -46,14 +51,29 @@ GREEN = 1
 GREEN_BLINK = 1
 RED = 3
 RED_BLINK = 4
-AMBER = 5
-AMBER_BLINK = 6
+YELLOW = 5
+YELLOW_BLINK = 6
 
 COLOR = 1
 BLINK = 2
 
+TOGGLE = 1
+GATE = 2
 
-class APCWidget(GridLayout):
+class APCMiniController(object):
+    def __init__(self, midiport, light_behaviour=None):
+        self.midiport = midiport
+
+    def recv_midi(self, msg):
+        pass
+
+class MidiButton(Button):
+    def __init__(self, note, *args, **kwargs):
+        self.note = note
+        self.light_color = OFF
+        Button.__init__(self, *args, **kwargs)
+
+class APCMiniWidget(GridLayout):
     """
     Widget holding all the controls on a real APC Mini.
 
@@ -77,7 +97,6 @@ class APCWidget(GridLayout):
             note = next(scene_ids)
             self.add_widget( self.create_button("scene_launch_%d" % row, note) )
 
-           
         # row 8 - control buttons and shift
         for i, note in enumerate(xrange(64, 72)):
             self.add_widget( self.create_button("control_%d" % i, note) )
@@ -88,9 +107,11 @@ class APCWidget(GridLayout):
         for i, note in enumerate(xrange(48, 57)):
             self.add_widget( self.create_slider("slider_%d" % i, note) )
 
+
     def create_button(self, id, note):
-        button = Button(id=id, text="")
+        button = MidiButton(note=note, id=id, text="")
         button.bind(on_press=self.handle_press)
+        button.bind(on_release=self.handle_release)
         self.note_buttons[note] = button
         return button
 
@@ -110,8 +131,10 @@ class APCWidget(GridLayout):
                 if msg.type == 'note_on':
                     print 'set button %s %s' % (button.id, id(button))
                     button.state = 'down'
+                    self.handle_press(button)
                 elif msg.type == 'note_off':
                     button.state = 'normal'
+                    self.handle_release(button)
                 button.canvas.ask_update()
             else:
                 print 'no button mapped to note {}'.format(msg.note)
@@ -124,7 +147,25 @@ class APCWidget(GridLayout):
                 print 'no slider mapped to control {}'.format(msg.control)
 
     def handle_press(self, button):
-        print 'press %s %s' % (button.id, id(button))
+        app = App.get_running_app()
+        if app.light_behaviour == GATE:
+            button.light_color = YELLOW
+            m = mido.Message('note_on', note=button.note, velocity=button.light_color)
+            app.midiport.send(m)
+        elif app.light_behaviour == TOGGLE:
+            if button.light_color is OFF:
+                button.light_color = YELLOW
+            else:
+                button.light_color = OFF
+            m = mido.Message('note_on', note=button.note, velocity=button.light_color)
+            app.midiport.send(m)
+
+    def handle_release(self, button):
+        app = App.get_running_app()
+        if app.light_behaviour == GATE:
+            m = mido.Message('note_on', note=button.note, velocity=OFF)
+            app.midiport.send(m)
+
 
     def handle_slide(self, slider, *args, **kwargs):
         print 'slide %s %d' % (slider.id, slider.value)
@@ -138,46 +179,59 @@ class ApcMiniApp(App):
     note_buttons = {}
     control_sliders = {}
 
-    def __init__(self, channel = 0, *args, **kwargs):
+    def __init__(self, channel=0, light_behaviour=None, *args, **kwargs):
         App.__init__(self, *args, **kwargs)
         self.channel = channel
         self.input_port = 'blah blah'
         self.output_port = 'blah blah out'
         self.apc_widget = None
         self.midiport = None
+        self.light_behaviour = light_behaviour
     
-    def build(self):
-        #d = "kivy-themes/red-lightgrey"
-        #atlas = Atlas(d + "/button_images/button_images.atlas")
-        atlas = "kivy-themes/red-lightgrey/defaulttheme.atlas"
-        #Cache.append("kv.atlas", 'data/images/defaulttheme', atlas)
+#    def build(self):
+#        #d = "kivy-themes/red-lightgrey"
+#        #atlas = Atlas(d + "/button_images/button_images.atlas")
+#        atlas = "kivy-themes/red-lightgrey/defaulttheme.atlas"
+#        #Cache.append("kv.atlas", 'data/images/defaulttheme', atlas)
 
     def open_input(self, portname):
         if self.midiport:
             self.midiport.close()
-        self.midiport = mido.open_input(portname, callback=self.recv_midi)
+        self.midiport = mido.open_ioport(portname, callback=self.recv_midi, autoreset=True)
+        # sysex to set APC Mini to mode 1
+        ##m = mido.Message('sysex', data=bytearray(b'\x47\x7F\x28\x60\x00\x04\x41\x09\x01\x04'))
+        ##self.midiport.send(m)
 
-    def light_matrix(x, y, color):
+    def light_matrix(self, x, y, color):
         pass
+
+    def get_apc_widget(self):
+        """
+        Search widget tree for APCMiniWidget
+        """
+        if self.apc_widget is None and self.root:
+            for widget in self.root.walk():
+                if isinstance(widget, APCMiniWidget):
+                    self.apc_widget = widget
+                    self.apc_widget.midiport = self.midiport ###
+                    break
+
+        return self.apc_widget
+
 
     # @mainthread
     def recv_midi(self, msg):
         try:
-            if self.apc_widget is None:
-                for widget in self.root.walk():
-                    if isinstance(widget, APCWidget):
-                        print 'Found APC Widget'
-                        self.apc_widget = widget
-                        break
-                else:
-                    print 'No APC Widget'
-                    return
+            apc_widget = self.get_apc_widget()
+            if not apc_widget:
+                return
 
             if msg.channel == self.channel:
-                self.apc_widget.recv_midi(msg)
+                apc_widget.recv_midi(msg)
             else:
                 print 'midi msg channel {} not channel {}'.format(msg.channel, self.channel)
         except Exception as e:
+            print 'err in recv_midi'
             print e
 
 
@@ -189,8 +243,8 @@ def main():
     else:
         portname = None   # Use default port
 
-    print portname
-    app = ApcMiniApp()
+
+    app = ApcMiniApp(light_behaviour=TOGGLE)
     app.open_input(portname)
     app.run()
 
@@ -198,6 +252,6 @@ if __name__ == '__main__':
     try:
         main()
     except Exception as e:
-        print e
+        logger.exception(e)
     
 
