@@ -19,7 +19,6 @@ $ pip install kivy mido
 
 """
 
-
 import logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -42,6 +41,8 @@ from kivy.uix.slider import Slider
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.gridlayout import GridLayout
 from kivy.uix.button import Button
+from kivy.uix.actionbar import ActionButton
+from kivy.uix.screenmanager import ScreenManager, Screen
 
 # TODO - Other modes, control lights
 
@@ -54,6 +55,11 @@ RED_BLINK = 4
 YELLOW = 5
 YELLOW_BLINK = 6
 
+DEFAULT_COLOR = GREEN
+
+ALL_LIT_COLORS = [GREEN, RED, YELLOW]
+ALL_SOLID_COLORS = [OFF, GREEN, RED, YELLOW]
+
 COLOR = 1
 BLINK = 2
 
@@ -61,8 +67,17 @@ TOGGLE = 1
 GATE = 2
 
 class APCMiniController(object):
+    # Button ids
+    SCENE_IDS = xrange(82, 90)
+
     def __init__(self, midiport, light_behaviour=None):
         self.midiport = midiport
+
+    def clear_all(self):
+        """
+        Set lights on all buttons to OFF
+        """
+        pass
 
     def recv_midi(self, msg):
         pass
@@ -107,7 +122,6 @@ class APCMiniWidget(GridLayout):
         for i, note in enumerate(xrange(48, 57)):
             self.add_widget( self.create_slider("slider_%d" % i, note) )
 
-
     def create_button(self, id, note):
         button = MidiButton(note=note, id=id, text="")
         button.bind(on_press=self.handle_press)
@@ -121,6 +135,15 @@ class APCMiniWidget(GridLayout):
         self.control_sliders[controller] = slider
         return slider
 
+    def clear_clip_lights(self):
+        for button in self.note_buttons.values():
+            if button.id.startswith('clip_launch_'):
+                button.state = 'normal'
+
+    def clear_all_lights(self):
+        self.clear_clip_lights()
+        
+
     def recv_midi(self, msg):
         """
         Change the state of a button or slider in response to midi
@@ -128,6 +151,10 @@ class APCMiniWidget(GridLayout):
         if msg.type in ['note_on', 'note_off']:
             print 'got midi %s' % msg
             button = self.note_buttons.get(msg.note)
+            if button.id == 'shift':
+                app = App.get_running_app()
+                app.do_action(button)
+                return
             if button:
                 if msg.type == 'note_on':
                     print 'set button %s %s' % (button.id, id(button))
@@ -150,14 +177,16 @@ class APCMiniWidget(GridLayout):
     def handle_press(self, button):
         app = App.get_running_app()
         if app.light_behaviour == GATE:
-            button.light_color = YELLOW
+            button.light_color = DEFAULT_COLOR
             m = mido.Message('note_on', note=button.note, velocity=button.light_color)
             app.midiport.send(m)
         elif app.light_behaviour == TOGGLE:
             if button.light_color is OFF:
-                button.light_color = YELLOW
+                button.light_color = DEFAULT_COLOR
             else:
-                button.light_color = OFF
+                curr_index = ALL_SOLID_COLORS.index(button.light_color)
+                curr_index = (curr_index + 1) % (len(ALL_SOLID_COLORS))
+                button.light_color = ALL_SOLID_COLORS[curr_index]
             m = mido.Message('note_on', note=button.note, velocity=button.light_color)
             app.midiport.send(m)
 
@@ -173,12 +202,12 @@ class APCMiniWidget(GridLayout):
 
 
 
+class ApcMiniScreen(Screen):
+    pass
+
 
 class ApcMiniApp(App):
     CLIP_LAUNCH_NOTES = xrange(0, 64)
-
-    note_buttons = {}
-    control_sliders = {}
 
     def __init__(self, channel=0, light_behaviour=None, *args, **kwargs):
         App.__init__(self, *args, **kwargs)
@@ -189,11 +218,34 @@ class ApcMiniApp(App):
         self.midiport = None
         self.light_behaviour = light_behaviour
     
+    def build(self):
+        sm = ScreenManager()
+        sm.add_widget( ApcMiniScreen(name="main_screen") )
+        return sm
+    
+        ##super(ApcMiniApp, self).build()
+        ##for widget in self.root.walk():
+        ##    if isinstance(widget, ActionButton):
+        ##        print widget
+        ##        widget.bind(on_press=self.do_action)
+
 #    def build(self):
 #        #d = "kivy-themes/red-lightgrey"
 #        #atlas = Atlas(d + "/button_images/button_images.atlas")
 #        atlas = "kivy-themes/red-lightgrey/defaulttheme.atlas"
 #        #Cache.append("kv.atlas", 'data/images/defaulttheme', atlas)
+
+    def do_action(self, button):
+        print 'do_action'
+        #if button.id == 'clear_all':
+        apc_widget = self.get_apc_widget()
+        for button in apc_widget.note_buttons.values():
+            apc_widget.handle_release(button)
+
+            button.light_color = OFF
+            m = mido.Message('note_on', note=button.note, velocity=button.light_color)
+            self.midiport.send(m)
+
 
     def open_input(self, portname):
         if self.midiport:
@@ -237,9 +289,7 @@ class ApcMiniApp(App):
             logger.exception(e)
 
 
-
 def main():
-    global app
     if len(sys.argv) > 1:
         portname = sys.argv[1]
     else:
@@ -247,7 +297,6 @@ def main():
             portname = next(name for name in mido.get_ioport_names() if name.startswith('APC MINI MIDI'))
         except StopIteration:
             portname = None   # Use default port
-
 
     app = ApcMiniApp(light_behaviour=TOGGLE)
     app.open_input(portname)
